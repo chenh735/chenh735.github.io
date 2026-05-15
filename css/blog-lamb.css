@@ -29,9 +29,9 @@
   width: 100%;
   height: 100%;
   background-image: url('/img/blog-lamb-sprite.png');
+  background-position: 0 0;
   background-repeat: no-repeat;
   background-size: 600% 100%;
-  animation: blog-lamb-frames 1.1s steps(6) infinite;
 }
 
 .blog-lamb__sprite::before,
@@ -115,26 +115,12 @@
   animation: blog-lamb-idle 2.4s ease-in-out infinite;
 }
 
-.blog-lamb.is-hop .blog-lamb__button {
-  animation: blog-lamb-hop .78s cubic-bezier(.28, .84, .42, 1) infinite;
-}
-
 .blog-lamb.is-wave .blog-lamb__button {
   animation: blog-lamb-wave 1.15s ease-in-out infinite;
 }
 
-.blog-lamb.is-spin .blog-lamb__button {
-  animation: blog-lamb-spin 1.25s ease-in-out infinite;
-}
-
-@keyframes blog-lamb-frames {
-  from {
-    background-position: 0 0;
-  }
-
-  to {
-    background-position: 100% 0;
-  }
+.blog-lamb.is-wave .blog-lamb__sprite {
+  background-position: 20% 0;
 }
 
 @keyframes blog-lamb-idle {
@@ -144,16 +130,6 @@
 
   50% {
     transform: translateY(-4px) scale(1.015);
-  }
-}
-
-@keyframes blog-lamb-hop {
-  0%, 100% {
-    transform: translateY(0) scaleX(1.04) scaleY(.98);
-  }
-
-  42% {
-    transform: translateY(-22px) scaleX(.98) scaleY(1.04);
   }
 }
 
@@ -168,20 +144,6 @@
 
   66% {
     transform: rotate(5deg);
-  }
-}
-
-@keyframes blog-lamb-spin {
-  0%, 100% {
-    transform: rotate(0deg) scale(1);
-  }
-
-  45% {
-    transform: rotate(-10deg) scale(1.03);
-  }
-
-  78% {
-    transform: rotate(8deg) scale(.99);
   }
 }
 
@@ -211,8 +173,7 @@
 }
 
 @media (prefers-reduced-motion: reduce) {
-  .blog-lamb__button,
-  .blog-lamb__sprite {
+  .blog-lamb__button {
     animation-duration: 4s;
   }
 }

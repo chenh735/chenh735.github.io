@@ -3,7 +3,7 @@
   let messageTimer = null;
   let actionTimer = null;
 
-  const actionClasses = ['is-idle', 'is-wave', 'is-hop', 'is-spin', 'is-blink'];
+  const actionClasses = ['is-idle', 'is-wave', 'is-blink'];
 
   function getTimeGreeting () {
     const hour = new Date().getHours();
@@ -57,8 +57,7 @@
     idleTimer = window.setTimeout(function () {
       const actions = [
         { name: 'is-blink', duration: 900 },
-        { name: 'is-wave', duration: 1800 },
-        { name: 'is-hop', duration: 1200 }
+        { name: 'is-wave', duration: 1800 }
       ];
       const next = actions[Math.floor(Math.random() * actions.length)];
 
