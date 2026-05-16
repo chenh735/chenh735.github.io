@@ -1,0 +1,373 @@
+<!DOCTYPE html><html lang="zh-CN" data-theme="light"><head><meta charset="UTF-8"><meta http-equiv="X-UA-Compatible" content="IE=edge"><meta name="viewport" content="width=device-width, initial-scale=1.0,viewport-fit=cover"><title>用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持 | 酷酷的陈浩</title><meta name="author" content="酷酷的陈浩"><meta name="copyright" content="酷酷的陈浩"><meta name="format-detection" content="telephone=no"><meta name="theme-color" content="#ffffff"><meta name="description" content="项目信息 GitHub 地址：my-redis 技术栈：Rust、Tokio、RESP、AOF 项目定位：简化版 Redis，实现协议解析、命令分发、多数据结构和持久化  项目背景在学习 Rust 后端开发和数据库基础原理的过程中，我希望做一个比普通 CRUD 更贴近真实系统的练手项目。Redis 是一个很适合拆解的目标：它有网络通信、协议解析、命令分发、内存数据结构、过期策略和持久化机制，但核心">
+<meta property="og:type" content="article">
+<meta property="og:title" content="用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持">
+<meta property="og:url" content="https://chenh735.github.io/2026/05/16/my-redis-%E4%B8%80%E4%B8%AA%E4%BD%BF%E7%94%A8Rust%E5%AE%9E%E7%8E%B0%E7%9A%84%E7%AE%80%E6%98%93%E7%89%88redis/index.html">
+<meta property="og:site_name" content="酷酷的陈浩">
+<meta property="og:description" content="项目信息 GitHub 地址：my-redis 技术栈：Rust、Tokio、RESP、AOF 项目定位：简化版 Redis，实现协议解析、命令分发、多数据结构和持久化  项目背景在学习 Rust 后端开发和数据库基础原理的过程中，我希望做一个比普通 CRUD 更贴近真实系统的练手项目。Redis 是一个很适合拆解的目标：它有网络通信、协议解析、命令分发、内存数据结构、过期策略和持久化机制，但核心">
+<meta property="og:locale" content="zh_CN">
+<meta property="og:image" content="https://chenh735.github.io/images/image2.png">
+<meta property="article:published_time" content="2026-05-15T16:00:00.000Z">
+<meta property="article:modified_time" content="2026-05-16T15:22:07.066Z">
+<meta property="article:author" content="酷酷的陈浩">
+<meta property="article:tag" content="Redis">
+<meta property="article:tag" content="Rust">
+<meta property="article:tag" content="Tokio">
+<meta property="article:tag" content="数据库">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:image" content="https://chenh735.github.io/images/image2.png"><script type="application/ld+json">{
+  "@context": "https://schema.org",
+  "@type": "BlogPosting",
+  "headline": "用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持",
+  "url": "https://chenh735.github.io/2026/05/16/my-redis-%E4%B8%80%E4%B8%AA%E4%BD%BF%E7%94%A8Rust%E5%AE%9E%E7%8E%B0%E7%9A%84%E7%AE%80%E6%98%93%E7%89%88redis/",
+  "image": "https://chenh735.github.io/images/image2.png",
+  "datePublished": "2026-05-15T16:00:00.000Z",
+  "dateModified": "2026-05-16T15:22:07.066Z",
+  "author": [
+    {
+      "@type": "Person",
+      "name": "酷酷的陈浩",
+      "url": "https://chenh735.github.io"
+    }
+  ]
+}</script><link rel="shortcut icon" href="/img/favicon.png"><link rel="canonical" href="https://chenh735.github.io/2026/05/16/my-redis-%E4%B8%80%E4%B8%AA%E4%BD%BF%E7%94%A8Rust%E5%AE%9E%E7%8E%B0%E7%9A%84%E7%AE%80%E6%98%93%E7%89%88redis/index.html"><link rel="preconnect" href="//cdn.jsdelivr.net"/><link rel="preconnect" href="//busuanzi.ibruce.info"/><link rel="stylesheet" href="/css/index.css?v=5.5.3"><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/@fortawesome/fontawesome-free@7.1.0/css/all.min.css"><script>
+    (() => {
+      
+    const saveToLocal = {
+      set: (key, value, ttl) => {
+        if (!ttl) return
+        const expiry = Date.now() + ttl * 86400000
+        localStorage.setItem(key, JSON.stringify({ value, expiry }))
+      },
+      get: key => {
+        const itemStr = localStorage.getItem(key)
+        if (!itemStr) return undefined
+        const { value, expiry } = JSON.parse(itemStr)
+        if (Date.now() > expiry) {
+          localStorage.removeItem(key)
+          return undefined
+        }
+        return value
+      }
+    }
+
+    window.btf = {
+      saveToLocal,
+      getScript: (url, attr = {}) => new Promise((resolve, reject) => {
+        const script = document.createElement('script')
+        script.src = url
+        script.async = true
+        Object.entries(attr).forEach(([key, val]) => script.setAttribute(key, val))
+        script.onload = script.onreadystatechange = () => {
+          if (!script.readyState || /loaded|complete/.test(script.readyState)) resolve()
+        }
+        script.onerror = reject
+        document.head.appendChild(script)
+      }),
+      getCSS: (url, id) => new Promise((resolve, reject) => {
+        const link = document.createElement('link')
+        link.rel = 'stylesheet'
+        link.href = url
+        if (id) link.id = id
+        link.onload = link.onreadystatechange = () => {
+          if (!link.readyState || /loaded|complete/.test(link.readyState)) resolve()
+        }
+        link.onerror = reject
+        document.head.appendChild(link)
+      }),
+      addGlobalFn: (key, fn, name = false, parent = window) => {
+        if (!false && key.startsWith('pjax')) return
+        const globalFn = parent.globalFn || {}
+        globalFn[key] = globalFn[key] || {}
+        globalFn[key][name || Object.keys(globalFn[key]).length] = fn
+        parent.globalFn = globalFn
+      }
+    }
+  
+      
+      const activateDarkMode = () => {
+        document.documentElement.setAttribute('data-theme', 'dark')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#0d0d0d')
+        }
+      }
+      const activateLightMode = () => {
+        document.documentElement.setAttribute('data-theme', 'light')
+        if (document.querySelector('meta[name="theme-color"]') !== null) {
+          document.querySelector('meta[name="theme-color"]').setAttribute('content', '#ffffff')
+        }
+      }
+
+      btf.activateDarkMode = activateDarkMode
+      btf.activateLightMode = activateLightMode
+
+      const theme = saveToLocal.get('theme')
+    
+          theme === 'dark' ? activateDarkMode() : theme === 'light' ? activateLightMode() : null
+        
+      
+      const asideStatus = saveToLocal.get('aside-status')
+      if (asideStatus !== undefined) {
+        document.documentElement.classList.toggle('hide-aside', asideStatus === 'hide')
+      }
+    
+      
+    const detectApple = () => {
+      if (/iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent)) {
+        document.documentElement.classList.add('apple')
+      }
+    }
+    detectApple()
+  
+    })()
+  </script><script>const GLOBAL_CONFIG = {
+  root: '/',
+  algolia: undefined,
+  localSearch: undefined,
+  translate: undefined,
+  highlight: {"plugin":"highlight.js","highlightCopy":true,"highlightLang":true,"highlightHeightLimit":false,"highlightFullpage":false,"highlightMacStyle":false},
+  copy: {
+    success: '复制成功',
+    error: '复制失败',
+    noSupport: '浏览器不支持'
+  },
+  relativeDate: {
+    homepage: false,
+    post: false
+  },
+  runtime: '',
+  dateSuffix: {
+    just: '刚刚',
+    min: '分钟前',
+    hour: '小时前',
+    day: '天前',
+    month: '个月前'
+  },
+  copyright: undefined,
+  lightbox: 'null',
+  Snackbar: undefined,
+  infinitegrid: {
+    js: 'https://cdn.jsdelivr.net/npm/@egjs/infinitegrid@4.12.0/dist/infinitegrid.min.js',
+    buttonText: '加载更多'
+  },
+  isPhotoFigcaption: false,
+  islazyloadPlugin: false,
+  isAnchor: false,
+  percent: {
+    toc: true,
+    rightside: false,
+  },
+  autoDarkmode: false
+}</script><script id="config-diff">var GLOBAL_CONFIG_SITE = {
+  title: '用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持',
+  isHighlightShrink: false,
+  isToc: true,
+  pageType: 'post'
+}</script><link rel="stylesheet" href="/css/blog-lamb.css?v=20260515"><meta name="generator" content="Hexo 8.1.2"></head><body><div class="bg-animation" id="web_bg" style="background-image: url(/images/blog-bg-sunrise.png);"></div><div class="post" id="body-wrap"><header class="not-top-img" id="page-header"><nav id="nav"><span id="blog-info"><a class="nav-site-title" href="/"><span class="site-name">酷酷的陈浩</span></a><a class="nav-page-title" href="/"><span class="site-name">用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持</span><span class="site-name"><i class="fa-solid fa-circle-arrow-left"></i><span>  返回首页</span></span></a></span><div id="menus"></div></nav></header><main class="layout" id="content-inner"><div id="post"><div id="post-info"><h1 class="post-title">用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持</h1><div id="post-meta"><div class="meta-firstline"><span class="post-meta-date"><i class="far fa-calendar-alt fa-fw post-meta-icon"></i><span class="post-meta-label">发表于</span><time class="post-meta-date-created" datetime="2026-05-15T16:00:00.000Z" title="发表于 2026-05-16 00:00:00">2026-05-16</time><span class="post-meta-separator">|</span><i class="fas fa-history fa-fw post-meta-icon"></i><span class="post-meta-label">更新于</span><time class="post-meta-date-updated" datetime="2026-05-16T15:22:07.066Z" title="更新于 2026-05-16 23:22:07">2026-05-16</time></span><span class="post-meta-categories"><span class="post-meta-separator">|</span><i class="fas fa-inbox fa-fw post-meta-icon"></i><a class="post-meta-categories" href="/categories/%E9%A1%B9%E7%9B%AE%E5%AE%9E%E6%88%98/">项目实战</a></span></div><div class="meta-secondline"><span class="post-meta-separator">|</span><span class="post-meta-pv-cv" id="" data-flag-title=""><i class="far fa-eye fa-fw post-meta-icon"></i><span class="post-meta-label">浏览量:</span><span id="busuanzi_value_page_pv"><i class="fa-solid fa-spinner fa-spin"></i></span></span></div></div></div><article class="container post-content" id="article-container"><h2 id="项目信息"><a href="#项目信息" class="headerlink" title="项目信息"></a>项目信息</h2><ul>
+<li>GitHub 地址：<a target="_blank" rel="noopener" href="https://github.com/chenh735/my-redis">my-redis</a></li>
+<li>技术栈：Rust、Tokio、RESP、AOF</li>
+<li>项目定位：简化版 Redis，实现协议解析、命令分发、多数据结构和持久化</li>
+</ul>
+<h2 id="项目背景"><a href="#项目背景" class="headerlink" title="项目背景"></a>项目背景</h2><p>在学习 Rust 后端开发和数据库基础原理的过程中，我希望做一个比普通 CRUD 更贴近真实系统的练手项目。Redis 是一个很适合拆解的目标：它有网络通信、协议解析、命令分发、内存数据结构、过期策略和持久化机制，但核心模型又足够清晰。</p>
+<p>因此我实现了一个简化版 Redis，项目名为 <code>my-redis</code>。这个项目不是为了完整复刻 Redis，而是围绕 Redis 的核心机制做一次从 0 到 1 的实现，用来理解一个内存数据库服务端的基本工作方式。</p>
+<p>项目当前支持：</p>
+<ul>
+<li>RESP 协议解析和编码</li>
+<li>TCP 服务端和命令行客户端</li>
+<li>String、List、Set、Hash 多种数据结构</li>
+<li>key 过期时间和后台清理</li>
+<li>AOF 持久化和启动恢复</li>
+<li>基础 Redis 命令和 Set 集合运算命令</li>
+</ul>
+<h2 id="我的职责"><a href="#我的职责" class="headerlink" title="我的职责"></a>我的职责</h2><p>这个项目由我独立完成，主要负责：</p>
+<ul>
+<li>设计项目模块结构，将协议、命令、存储和持久化拆分到不同模块</li>
+<li>使用 Tokio 实现异步 TCP 服务端</li>
+<li>实现 RESP 请求解析和响应编码</li>
+<li>设计内存数据库结构，支持多种 Redis 数据类型</li>
+<li>实现命令分发层，将客户端命令映射到具体数据操作</li>
+<li>实现 key 过期判断、惰性删除和后台定时清理</li>
+<li>实现 AOF 追加写入和服务启动时的命令重放</li>
+<li>编写单元测试，覆盖 DB 层、命令层、RESP 协议和 AOF 逻辑</li>
+<li>持续扩展命令能力，例如 <code>STRLEN</code>、<code>APPEND</code>、<code>HLEN</code>、<code>HKEYS</code>、<code>HVALS</code>、<code>SINTER</code>、<code>SUNION</code>、<code>SDIFF</code></li>
+</ul>
+<h2 id="技术选型"><a href="#技术选型" class="headerlink" title="技术选型"></a>技术选型</h2><h3 id="Rust"><a href="#Rust" class="headerlink" title="Rust"></a>Rust</h3><p>选择 Rust 的主要原因是它适合实现系统类项目。Redis 这类服务端涉及内存数据结构、并发共享状态和错误处理，Rust 的所有权系统、枚举和模式匹配能很好地表达这些逻辑。</p>
+<p>例如数据库 value 使用 enum 建模：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">Value</span> &#123;</span><br><span class="line">    <span class="title function_ invoke__">String</span>(<span class="type">String</span>),</span><br><span class="line">    <span class="title function_ invoke__">List</span>(VecDeque&lt;<span class="type">String</span>&gt;),</span><br><span class="line">    <span class="title function_ invoke__">Set</span>(HashSet&lt;<span class="type">String</span>&gt;),</span><br><span class="line">    <span class="title function_ invoke__">Hash</span>(HashMap&lt;<span class="type">String</span>, <span class="type">String</span>&gt;),</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>相比使用字符串或动态类型，enum 可以让不同数据结构的类型边界更清晰。当某个命令操作了错误类型的 key 时，可以直接通过模式匹配返回 <code>WRONGTYPE</code> 错误。</p>
+<h3 id="Tokio"><a href="#Tokio" class="headerlink" title="Tokio"></a>Tokio</h3><p>服务端使用 Tokio 实现异步 TCP 通信。每个客户端连接都会被放到独立异步任务里处理，多个连接共享同一份数据库状态。</p>
+<p>数据库结构使用：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">struct</span> <span class="title class_">Db</span> &#123;</span><br><span class="line">    inner: Arc&lt;RwLock&lt;HashMap&lt;<span class="type">String</span>, Entry&gt;&gt;&gt;,</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>其中：</p>
+<ul>
+<li><code>Arc</code> 用于在多个连接任务之间共享数据库</li>
+<li><code>RwLock</code> 用于保证并发读写安全</li>
+<li><code>HashMap&lt;String, Entry&gt;</code> 用于保存 key-value 数据</li>
+</ul>
+<h3 id="RESP-协议"><a href="#RESP-协议" class="headerlink" title="RESP 协议"></a>RESP 协议</h3><p>Redis 客户端和服务端之间使用 RESP 协议通信。本项目实现了 RESP Array、Bulk String、Integer、Simple String、Error 等基础编码和解码能力。</p>
+<p>例如命令：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">SET name redis</span><br></pre></td></tr></table></figure>
+
+<p>会被编码成：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">*3\r\n$3\r\nSET\r\n$4\r\nname\r\n$5\r\nredis\r\n</span><br></pre></td></tr></table></figure>
+
+<p>服务端解析 RESP 后得到参数数组，再交给命令分发层处理。</p>
+<h3 id="AOF-持久化"><a href="#AOF-持久化" class="headerlink" title="AOF 持久化"></a>AOF 持久化</h3><p>持久化采用简化版 AOF。写命令成功执行后，会以 RESP 格式追加到 <code>appendonly.aof</code>。服务启动时读取 AOF 文件并重放历史写命令，从而恢复内存数据。</p>
+<h2 id="核心功能"><a href="#核心功能" class="headerlink" title="核心功能"></a>核心功能</h2><h3 id="1-TCP-服务端和客户端"><a href="#1-TCP-服务端和客户端" class="headerlink" title="1. TCP 服务端和客户端"></a>1. TCP 服务端和客户端</h3><p>服务端默认监听 <code>127.0.0.1:6379</code>，接收客户端连接后循环读取 RESP 请求，解析命令并返回响应。</p>
+<p>客户端是一个简单命令行工具，可以通过 <code>--cmd</code> 参数发送命令：</p>
+<figure class="highlight powershell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br></pre></td><td class="code"><pre><span class="line">cargo run <span class="literal">--bin</span> client <span class="literal">--</span> <span class="literal">--cmd</span> <span class="string">&quot;PING&quot;</span></span><br><span class="line">cargo run <span class="literal">--bin</span> client <span class="literal">--</span> <span class="literal">--cmd</span> <span class="string">&quot;SADD tags rust db&quot;</span></span><br><span class="line">cargo run <span class="literal">--bin</span> client <span class="literal">--</span> <span class="literal">--cmd</span> <span class="string">&quot;SMEMBERS tags&quot;</span></span><br></pre></td></tr></table></figure>
+
+<h3 id="2-命令分发"><a href="#2-命令分发" class="headerlink" title="2. 命令分发"></a>2. 命令分发</h3><p>命令分发层接收 RESP 解码后的参数数组，根据第一个参数决定调用哪个处理函数：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">match</span> args[<span class="number">0</span>].<span class="title function_ invoke__">to_ascii_lowercase</span>().<span class="title function_ invoke__">as_str</span>() &#123;</span><br><span class="line">    <span class="string">&quot;ping&quot;</span> =&gt; <span class="title function_ invoke__">ping</span>(args),</span><br><span class="line">    <span class="string">&quot;echo&quot;</span> =&gt; <span class="title function_ invoke__">echo</span>(args),</span><br><span class="line">    <span class="string">&quot;set&quot;</span> | <span class="string">&quot;strset&quot;</span> =&gt; <span class="title function_ invoke__">strset</span>(db, args).<span class="keyword">await</span>,</span><br><span class="line">    <span class="string">&quot;get&quot;</span> | <span class="string">&quot;strget&quot;</span> =&gt; <span class="title function_ invoke__">strget</span>(db, args).<span class="keyword">await</span>,</span><br><span class="line">    <span class="string">&quot;lpush&quot;</span> =&gt; <span class="title function_ invoke__">list_push</span>(db, args, <span class="literal">true</span>).<span class="keyword">await</span>,</span><br><span class="line">    <span class="string">&quot;sadd&quot;</span> =&gt; <span class="title function_ invoke__">set_add</span>(db, args).<span class="keyword">await</span>,</span><br><span class="line">    <span class="string">&quot;sinter&quot;</span> =&gt; <span class="title function_ invoke__">set_inter</span>(db, args).<span class="keyword">await</span>,</span><br><span class="line">    <span class="string">&quot;sunion&quot;</span> =&gt; <span class="title function_ invoke__">set_union</span>(db, args).<span class="keyword">await</span>,</span><br><span class="line">    <span class="string">&quot;sdiff&quot;</span> =&gt; <span class="title function_ invoke__">set_diff</span>(db, args).<span class="keyword">await</span>,</span><br><span class="line">    <span class="string">&quot;hset&quot;</span> =&gt; <span class="title function_ invoke__">hash_set</span>(db, args).<span class="keyword">await</span>,</span><br><span class="line">    _ =&gt; <span class="title function_ invoke__">syntax_error</span>(),</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这一层主要负责参数校验、调用 DB 层和编码响应，不直接处理复杂的数据结构逻辑。</p>
+<h3 id="3-多数据结构支持"><a href="#3-多数据结构支持" class="headerlink" title="3. 多数据结构支持"></a>3. 多数据结构支持</h3><p>项目当前支持四类 Redis 数据结构。</p>
+<p>String 支持：</p>
+<ul>
+<li><code>SET</code> &#x2F; <code>STRSET</code></li>
+<li><code>GET</code> &#x2F; <code>STRGET</code></li>
+<li><code>STRLEN</code></li>
+<li><code>APPEND</code></li>
+</ul>
+<p>List 支持：</p>
+<ul>
+<li><code>LPUSH</code></li>
+<li><code>RPUSH</code></li>
+<li><code>LPOP</code></li>
+<li><code>RPOP</code></li>
+<li><code>LLEN</code></li>
+<li><code>LRANGE</code></li>
+</ul>
+<p>Set 支持：</p>
+<ul>
+<li><code>SADD</code></li>
+<li><code>SREM</code></li>
+<li><code>SISMEMBER</code></li>
+<li><code>SCARD</code></li>
+<li><code>SMEMBERS</code></li>
+<li><code>SINTER</code></li>
+<li><code>SUNION</code></li>
+<li><code>SDIFF</code></li>
+</ul>
+<p>Hash 支持：</p>
+<ul>
+<li><code>HSET</code></li>
+<li><code>HGET</code></li>
+<li><code>HDEL</code></li>
+<li><code>HEXISTS</code></li>
+<li><code>HGETALL</code></li>
+<li><code>HLEN</code></li>
+<li><code>HKEYS</code></li>
+<li><code>HVALS</code></li>
+</ul>
+<h3 id="4-key-过期机制"><a href="#4-key-过期机制" class="headerlink" title="4. key 过期机制"></a>4. key 过期机制</h3><p>每个 key 对应一个 <code>Entry</code>，其中保存 value 和过期时间：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">struct</span> <span class="title class_">Entry</span> &#123;</span><br><span class="line">    value: Value,</span><br><span class="line">    expires_at: <span class="type">Option</span>&lt;SystemTime&gt;,</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>判断是否过期：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">fn</span> <span class="title function_">is_expired</span>(&amp;<span class="keyword">self</span>) <span class="punctuation">-&gt;</span> <span class="type">bool</span> &#123;</span><br><span class="line">    <span class="keyword">self</span>.expires_at</span><br><span class="line">        .<span class="title function_ invoke__">is_some_and</span>(|expires_at| SystemTime::<span class="title function_ invoke__">now</span>() &gt;= expires_at)</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>过期清理采用两种方式：</p>
+<ul>
+<li>惰性删除：访问 key 时发现过期，立即删除</li>
+<li>后台清理：服务启动后定时扫描并清理过期 key</li>
+</ul>
+<h3 id="5-AOF-持久化"><a href="#5-AOF-持久化" class="headerlink" title="5. AOF 持久化"></a>5. AOF 持久化</h3><p>写命令执行成功后，会被追加到 AOF 文件。当前支持持久化的写命令包括：</p>
+<ul>
+<li><code>SET</code> &#x2F; <code>STRSET</code></li>
+<li><code>DEL</code></li>
+<li><code>APPEND</code></li>
+<li><code>LPUSH</code></li>
+<li><code>RPUSH</code></li>
+<li><code>LPOP</code></li>
+<li><code>RPOP</code></li>
+<li><code>SADD</code></li>
+<li><code>SREM</code></li>
+<li><code>HSET</code></li>
+<li><code>HDEL</code></li>
+</ul>
+<p>服务启动时会读取 <code>appendonly.aof</code>，解析其中的 RESP 命令并重放：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">for</span> <span class="variable">args</span> <span class="keyword">in</span> <span class="title function_ invoke__">parse_array</span>(&amp;content)? &#123;</span><br><span class="line">    <span class="keyword">if</span> !<span class="title function_ invoke__">is_write_command</span>(&amp;args) &#123;</span><br><span class="line">        bail!(<span class="string">&quot;AOF only supports write commands: &#123;&#125;&quot;</span>, args[<span class="number">0</span>]);</span><br><span class="line">    &#125;</span><br><span class="line"></span><br><span class="line">    <span class="keyword">let</span> <span class="variable">response</span> = <span class="title function_ invoke__">dispatch</span>(db.<span class="title function_ invoke__">clone</span>(), args).<span class="keyword">await</span>;</span><br><span class="line">    <span class="keyword">if</span> response.<span class="title function_ invoke__">starts_with</span>(<span class="string">&#x27;-&#x27;</span>) &#123;</span><br><span class="line">        bail!(<span class="string">&quot;replay AOF command failed: &#123;&#125;&quot;</span>, response.<span class="title function_ invoke__">trim_end</span>());</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h2 id="难点与解决方案"><a href="#难点与解决方案" class="headerlink" title="难点与解决方案"></a>难点与解决方案</h2><h3 id="难点一：如何支持多种-value-类型"><a href="#难点一：如何支持多种-value-类型" class="headerlink" title="难点一：如何支持多种 value 类型"></a>难点一：如何支持多种 value 类型</h3><p>如果数据库只使用 <code>HashMap&lt;String, String&gt;</code>，实现会很简单，但无法扩展 List、Set、Hash。</p>
+<p>解决方案是引入 <code>Value</code> 枚举：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">pub</span> <span class="keyword">enum</span> <span class="title class_">Value</span> &#123;</span><br><span class="line">    <span class="title function_ invoke__">String</span>(<span class="type">String</span>),</span><br><span class="line">    <span class="title function_ invoke__">List</span>(VecDeque&lt;<span class="type">String</span>&gt;),</span><br><span class="line">    <span class="title function_ invoke__">Set</span>(HashSet&lt;<span class="type">String</span>&gt;),</span><br><span class="line">    <span class="title function_ invoke__">Hash</span>(HashMap&lt;<span class="type">String</span>, <span class="type">String</span>&gt;),</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这样所有 key 仍然存在同一个 key 空间中，但每个 key 的 value 可以是不同数据结构。命令执行时通过模式匹配判断类型，如果类型不匹配就返回 <code>WrongType</code>。</p>
+<p>例如列表插入逻辑：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br><span class="line">18</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">match</span> write.<span class="title function_ invoke__">get_mut</span>(key) &#123;</span><br><span class="line">    <span class="title function_ invoke__">Some</span>(entry) =&gt; <span class="keyword">match</span> &amp;<span class="keyword">mut</span> entry.value &#123;</span><br><span class="line">        Value::<span class="title function_ invoke__">List</span>(list) =&gt; &#123;</span><br><span class="line">            <span class="title function_ invoke__">push_values</span>(list, values, left);</span><br><span class="line">            <span class="title function_ invoke__">Ok</span>(list.<span class="title function_ invoke__">len</span>())</span><br><span class="line">        &#125;</span><br><span class="line">        _ =&gt; <span class="title function_ invoke__">Err</span>(DbError::WrongType),</span><br><span class="line">    &#125;,</span><br><span class="line">    <span class="literal">None</span> =&gt; &#123;</span><br><span class="line">        <span class="keyword">let</span> <span class="keyword">mut </span><span class="variable">list</span> = VecDeque::<span class="title function_ invoke__">new</span>();</span><br><span class="line">        <span class="title function_ invoke__">push_values</span>(&amp;<span class="keyword">mut</span> list, values, left);</span><br><span class="line">        write.<span class="title function_ invoke__">insert</span>(key.<span class="title function_ invoke__">to_string</span>(), Entry &#123;</span><br><span class="line">            value: Value::<span class="title function_ invoke__">List</span>(list),</span><br><span class="line">            expires_at: <span class="literal">None</span>,</span><br><span class="line">        &#125;);</span><br><span class="line">        <span class="title function_ invoke__">Ok</span>(values.<span class="title function_ invoke__">len</span>())</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="难点二：过期-key-如何处理"><a href="#难点二：过期-key-如何处理" class="headerlink" title="难点二：过期 key 如何处理"></a>难点二：过期 key 如何处理</h3><p>过期 key 不能只在 <code>GET</code> 时处理，因为其他命令比如 <code>EXISTS</code>、<code>DEL</code>、<code>SADD</code> 也可能访问到过期 key。</p>
+<p>解决方案是组合使用惰性删除和后台清理：</p>
+<ul>
+<li>命令访问 key 时先判断是否过期</li>
+<li>后台任务周期性清理所有过期 key</li>
+</ul>
+<p>后台清理代码：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">async</span> <span class="keyword">fn</span> <span class="title function_">clean_up_keys</span>(&amp;<span class="keyword">self</span>) &#123;</span><br><span class="line">    <span class="keyword">let</span> <span class="keyword">mut </span><span class="variable">db</span> = <span class="keyword">self</span>.inner.<span class="title function_ invoke__">write</span>().<span class="keyword">await</span>;</span><br><span class="line">    db.<span class="title function_ invoke__">retain</span>(|_key, entry| !entry.<span class="title function_ invoke__">is_expired</span>());</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p>这样即使某些 key 长时间不被访问，也能被定时任务清理掉。</p>
+<h3 id="难点三：集合运算的语义处理"><a href="#难点三：集合运算的语义处理" class="headerlink" title="难点三：集合运算的语义处理"></a>难点三：集合运算的语义处理</h3><p>Set 命令中，<code>SINTER</code>、<code>SUNION</code>、<code>SDIFF</code> 都涉及多个 key。这里需要同时处理几种情况：</p>
+<ul>
+<li>key 不存在</li>
+<li>key 存在但不是 Set</li>
+<li>key 已经过期</li>
+<li>返回结果顺序不稳定</li>
+</ul>
+<p>我的处理方式是：</p>
+<ul>
+<li>不存在的 key 按空集合处理</li>
+<li>类型不匹配返回 <code>WRONGTYPE</code></li>
+<li>操作前先清理过期 key</li>
+<li>返回前排序，保证测试和输出稳定</li>
+</ul>
+<p><code>SUNION</code> 的实现思路是把多个集合的成员放入同一个 <code>HashSet</code>：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">let</span> <span class="keyword">mut </span><span class="variable">values</span> = HashSet::<span class="title function_ invoke__">new</span>();</span><br><span class="line"><span class="keyword">for</span> <span class="variable">key</span> <span class="keyword">in</span> keys &#123;</span><br><span class="line">    <span class="keyword">match</span> write.<span class="title function_ invoke__">get</span>(key) &#123;</span><br><span class="line">        <span class="title function_ invoke__">Some</span>(entry) =&gt; <span class="keyword">match</span> &amp;entry.value &#123;</span><br><span class="line">            Value::<span class="title function_ invoke__">Set</span>(set) =&gt; values.<span class="title function_ invoke__">extend</span>(set.<span class="title function_ invoke__">iter</span>().<span class="title function_ invoke__">cloned</span>()),</span><br><span class="line">            _ =&gt; <span class="keyword">return</span> <span class="title function_ invoke__">Err</span>(DbError::WrongType),</span><br><span class="line">        &#125;,</span><br><span class="line">        <span class="literal">None</span> =&gt; &#123;&#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<p><code>SDIFF</code> 的实现思路是先复制第一个集合，再依次删除后续集合中出现过的成员：</p>
+<figure class="highlight rust"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br><span class="line">5</span><br><span class="line">6</span><br><span class="line">7</span><br><span class="line">8</span><br><span class="line">9</span><br><span class="line">10</span><br><span class="line">11</span><br><span class="line">12</span><br><span class="line">13</span><br><span class="line">14</span><br><span class="line">15</span><br><span class="line">16</span><br><span class="line">17</span><br></pre></td><td class="code"><pre><span class="line"><span class="keyword">let</span> <span class="keyword">mut </span><span class="variable">values</span> = <span class="keyword">match</span> write.<span class="title function_ invoke__">get</span>(&amp;keys[<span class="number">0</span>]) &#123;</span><br><span class="line">    <span class="title function_ invoke__">Some</span>(entry) =&gt; <span class="keyword">match</span> &amp;entry.value &#123;</span><br><span class="line">        Value::<span class="title function_ invoke__">Set</span>(set) =&gt; set.<span class="title function_ invoke__">clone</span>(),</span><br><span class="line">        _ =&gt; <span class="keyword">return</span> <span class="title function_ invoke__">Err</span>(DbError::WrongType),</span><br><span class="line">    &#125;,</span><br><span class="line">    <span class="literal">None</span> =&gt; <span class="keyword">return</span> <span class="title function_ invoke__">Ok</span>(<span class="type">Vec</span>::<span class="title function_ invoke__">new</span>()),</span><br><span class="line">&#125;;</span><br><span class="line"></span><br><span class="line"><span class="keyword">for</span> <span class="variable">key</span> <span class="keyword">in</span> &amp;keys[<span class="number">1</span>..] &#123;</span><br><span class="line">    <span class="keyword">match</span> write.<span class="title function_ invoke__">get</span>(key) &#123;</span><br><span class="line">        <span class="title function_ invoke__">Some</span>(entry) =&gt; <span class="keyword">match</span> &amp;entry.value &#123;</span><br><span class="line">            Value::<span class="title function_ invoke__">Set</span>(set) =&gt; values.<span class="title function_ invoke__">retain</span>(|value| !set.<span class="title function_ invoke__">contains</span>(value)),</span><br><span class="line">            _ =&gt; <span class="keyword">return</span> <span class="title function_ invoke__">Err</span>(DbError::WrongType),</span><br><span class="line">        &#125;,</span><br><span class="line">        <span class="literal">None</span> =&gt; &#123;&#125;</span><br><span class="line">    &#125;</span><br><span class="line">&#125;</span><br></pre></td></tr></table></figure>
+
+<h3 id="难点四：AOF-如何恢复内存状态"><a href="#难点四：AOF-如何恢复内存状态" class="headerlink" title="难点四：AOF 如何恢复内存状态"></a>难点四：AOF 如何恢复内存状态</h3><p>AOF 的关键不是保存最终数据，而是保存写命令。服务启动时只需要按顺序重放写命令，就可以恢复数据库状态。</p>
+<p>这个过程有两个细节：</p>
+<ul>
+<li>AOF 中只能出现写命令，读命令不应该写入</li>
+<li>重放时如果某条命令执行失败，要及时暴露错误</li>
+</ul>
+<p>因此我实现了 <code>is_write_command</code> 来判断命令是否应该进入 AOF，同时在加载 AOF 时检查重放结果。</p>
+<h2 id="成果"><a href="#成果" class="headerlink" title="成果"></a>成果</h2><p>目前项目已经实现了一个可运行的简化 Redis 服务端，支持通过命令行客户端进行交互。</p>
+<p>示例：</p>
+<figure class="highlight powershell"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">cargo run</span><br></pre></td></tr></table></figure>
+
+<p>另开终端执行：</p>
+<figure class="highlight powershell"><table><tr><td class="gutter"><pre><span class="line">1</span><br><span class="line">2</span><br><span class="line">3</span><br><span class="line">4</span><br></pre></td><td class="code"><pre><span class="line">cargo run <span class="literal">--bin</span> client <span class="literal">--</span> <span class="literal">--cmd</span> <span class="string">&quot;SADD a one two three&quot;</span></span><br><span class="line">cargo run <span class="literal">--bin</span> client <span class="literal">--</span> <span class="literal">--cmd</span> <span class="string">&quot;SADD b two four&quot;</span></span><br><span class="line">cargo run <span class="literal">--bin</span> client <span class="literal">--</span> <span class="literal">--cmd</span> <span class="string">&quot;SUNION a b&quot;</span></span><br><span class="line">cargo run <span class="literal">--bin</span> client <span class="literal">--</span> <span class="literal">--cmd</span> <span class="string">&quot;SDIFF a b&quot;</span></span><br></pre></td></tr></table></figure>
+
+<p>命令会返回 RESP 解码后的结果。</p>
+<p>项目测试覆盖了：</p>
+<ul>
+<li>DB 层数据操作</li>
+<li>命令分发和响应格式</li>
+<li>RESP 编码和解码</li>
+<li>AOF 写入和启动恢复</li>
+<li>key 过期逻辑</li>
+<li>Set 集合运算逻辑</li>
+</ul>
+<p>当前运行测试：</p>
+<figure class="highlight powershell"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">cargo test</span><br></pre></td></tr></table></figure>
+
+<p>结果为：</p>
+<figure class="highlight text"><table><tr><td class="gutter"><pre><span class="line">1</span><br></pre></td><td class="code"><pre><span class="line">33 passed</span><br></pre></td></tr></table></figure>
+
+<h2 id="总结"><a href="#总结" class="headerlink" title="总结"></a>总结</h2><p>这个项目让我把 Redis 的几个核心机制串了起来：协议解析、网络通信、命令执行、内存数据结构、过期策略和持久化。相比只看 Redis 文档，自己实现一遍会更容易理解很多命令背后的细节。</p>
+<p>Rust 在这个项目中也很适合发挥优势。用 enum 建模多种 value 类型，用模式匹配处理类型分支，用 <code>Arc&lt;RwLock&lt;_&gt;&gt;</code> 管理共享状态，这些都让代码结构比较清晰。</p>
+<p>后续我计划继续完善这些能力：</p>
+<ul>
+<li>支持 <code>EXPIRE</code>、<code>TTL</code>、<code>PERSIST</code></li>
+<li>支持 <code>INCR</code>、<code>DECR</code>、<code>INCRBY</code></li>
+<li>支持 <code>MGET</code>、<code>MSET</code></li>
+<li>支持 <code>LINDEX</code>、<code>LSET</code>、<code>LTRIM</code></li>
+<li>支持 <code>HMGET</code>、<code>HINCRBY</code></li>
+<li>实现 AOF rewrite，减少 AOF 文件体积</li>
+<li>进一步完善错误类型和命令兼容性</li>
+</ul>
+<p>整体来看，<code>my-redis</code> 是一个非常适合作为 Rust 后端练手的项目。它规模不大，但包含了后端系统中很多关键问题：协议、并发、状态管理、数据结构和持久化。继续扩展下去，也可以逐步接近一个更完整的 Redis 学习版实现。</p>
+</article><div class="post-copyright"><div class="post-copyright__author"><span class="post-copyright-meta"><i class="fas fa-circle-user fa-fw"></i>文章作者: </span><span class="post-copyright-info"><a href="https://chenh735.github.io">酷酷的陈浩</a></span></div><div class="post-copyright__type"><span class="post-copyright-meta"><i class="fas fa-square-arrow-up-right fa-fw"></i>文章链接: </span><span class="post-copyright-info"><a href="https://chenh735.github.io/2026/05/16/my-redis-%E4%B8%80%E4%B8%AA%E4%BD%BF%E7%94%A8Rust%E5%AE%9E%E7%8E%B0%E7%9A%84%E7%AE%80%E6%98%93%E7%89%88redis/">https://chenh735.github.io/2026/05/16/my-redis-%E4%B8%80%E4%B8%AA%E4%BD%BF%E7%94%A8Rust%E5%AE%9E%E7%8E%B0%E7%9A%84%E7%AE%80%E6%98%93%E7%89%88redis/</a></span></div><div class="post-copyright__notice"><span class="post-copyright-meta"><i class="fas fa-circle-exclamation fa-fw"></i>版权声明: </span><span class="post-copyright-info">本博客所有文章除特别声明外，均采用 <a href="https://creativecommons.org/licenses/by-nc-sa/4.0/" target="_blank">CC BY-NC-SA 4.0</a> 许可协议。转载请注明来源 <a href="https://chenh735.github.io" target="_blank">酷酷的陈浩</a>！</span></div></div><div class="tag_share"><div class="post-meta__tag-list"><a class="post-meta__tags" href="/tags/Rust/">Rust</a><a class="post-meta__tags" href="/tags/Redis/">Redis</a><a class="post-meta__tags" href="/tags/Tokio/">Tokio</a><a class="post-meta__tags" href="/tags/%E6%95%B0%E6%8D%AE%E5%BA%93/">数据库</a></div><div class="post-share"><div class="social-share" data-image="/images/image2.png" data-sites="facebook,x,wechat,weibo,qq"></div><link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/css/share.min.css" media="print" onload="this.media='all'"><script src="https://cdn.jsdelivr.net/npm/butterfly-extsrc@1.1.6/sharejs/dist/js/social-share.min.js" defer></script></div></div><nav class="pagination-post" id="pagination"><a class="pagination-related full-width" href="/2026/05/14/Hexo%E5%8D%9A%E5%AE%A2%E5%8F%91%E5%B8%83%E6%95%99%E7%A8%8B/" title="Hexo 博客发布教程：从写文章到 GitHub Pages 上线"><div class="cover" style="background: var(--default-bg-color)"></div><div class="info text-right"><div class="info-1"><div class="info-item-1">下一篇</div><div class="info-item-2">Hexo 博客发布教程：从写文章到 GitHub Pages 上线</div></div><div class="info-2"><div class="info-item-1">这篇文章记录一下我现在这套 Hexo 博客的发布流程。我的博客使用 Hexo 生成静态文件，再把生成结果同步到 GitHub Pages 仓库。 目录结构我本地有两个重要目录： 12C:\Project\blog\hexo\blog-sourceC:\Project\blog\chenh735.github.io  第一个目录是 Hexo 源工程，平时写文章、改主题配置都在这里进行。 第二个目录是 GitHub Pages 发布仓库，里面放的是 Hexo 生成后的静态文件。这个目录会被推送到 GitHub，然后由 GitHub Pages 展示到网上。 整体关系可以理解为： 123456789blog-source/source/_posts 写 Markdown 文章  ↓hexo generate 生成 public 静态文件  ↓把 public 同步到 chenh735.github.io  ↓git push 到 GitHub  ↓GitHub Pages 自动上线  准备工作我的电脑上使用 pnpm，所以执行 Hexo 命令时使用： 1pnpm.cmd exec he...</div></div></div></a></nav></div><div class="aside-content" id="aside-content"><div class="card-widget card-info text-center"><div class="avatar-img"><img src="/images/image2.png" onerror="this.onerror=null;this.src='/img/friend_404.gif'" alt="avatar"/></div><div class="author-info-name">酷酷的陈浩</div><div class="author-info-description"></div><div class="site-data"><a href="/archives/"><div class="headline">文章</div><div class="length-num">3</div></a><a href="/tags/"><div class="headline">标签</div><div class="length-num">7</div></a><a href="/categories/"><div class="headline">分类</div><div class="length-num">2</div></a></div><a id="card-info-btn" target="_blank" rel="noopener" href="https://github.com/chenh735"><i class="fab fa-github"></i><span>Follow Me</span></a><div class="card-info-social-icons"><a class="social-icon" href="https://github.com/chenh735" target="_blank" title="Github"><i class="fab fa-github"></i></a></div></div><div class="card-widget card-announcement"><div class="item-headline"><i class="fas fa-bullhorn fa-shake"></i><span>公告</span></div><div class="announcement_content">欢迎来到我的博客！这里记录了我的学习和生活点滴，希望能与大家分享和交流。</div></div><div class="sticky_layout"><div class="card-widget" id="card-toc"><div class="item-headline"><i class="fas fa-stream"></i><span>目录</span><span class="toc-percentage"></span></div><div class="toc-content"><ol class="toc"><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%A1%B9%E7%9B%AE%E4%BF%A1%E6%81%AF"><span class="toc-number">1.</span> <span class="toc-text">项目信息</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%A1%B9%E7%9B%AE%E8%83%8C%E6%99%AF"><span class="toc-number">2.</span> <span class="toc-text">项目背景</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%88%91%E7%9A%84%E8%81%8C%E8%B4%A3"><span class="toc-number">3.</span> <span class="toc-text">我的职责</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%8A%80%E6%9C%AF%E9%80%89%E5%9E%8B"><span class="toc-number">4.</span> <span class="toc-text">技术选型</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#Rust"><span class="toc-number">4.1.</span> <span class="toc-text">Rust</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#Tokio"><span class="toc-number">4.2.</span> <span class="toc-text">Tokio</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#RESP-%E5%8D%8F%E8%AE%AE"><span class="toc-number">4.3.</span> <span class="toc-text">RESP 协议</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#AOF-%E6%8C%81%E4%B9%85%E5%8C%96"><span class="toc-number">4.4.</span> <span class="toc-text">AOF 持久化</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%A0%B8%E5%BF%83%E5%8A%9F%E8%83%BD"><span class="toc-number">5.</span> <span class="toc-text">核心功能</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#1-TCP-%E6%9C%8D%E5%8A%A1%E7%AB%AF%E5%92%8C%E5%AE%A2%E6%88%B7%E7%AB%AF"><span class="toc-number">5.1.</span> <span class="toc-text">1. TCP 服务端和客户端</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#2-%E5%91%BD%E4%BB%A4%E5%88%86%E5%8F%91"><span class="toc-number">5.2.</span> <span class="toc-text">2. 命令分发</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#3-%E5%A4%9A%E6%95%B0%E6%8D%AE%E7%BB%93%E6%9E%84%E6%94%AF%E6%8C%81"><span class="toc-number">5.3.</span> <span class="toc-text">3. 多数据结构支持</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#4-key-%E8%BF%87%E6%9C%9F%E6%9C%BA%E5%88%B6"><span class="toc-number">5.4.</span> <span class="toc-text">4. key 过期机制</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#5-AOF-%E6%8C%81%E4%B9%85%E5%8C%96"><span class="toc-number">5.5.</span> <span class="toc-text">5. AOF 持久化</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E9%9A%BE%E7%82%B9%E4%B8%8E%E8%A7%A3%E5%86%B3%E6%96%B9%E6%A1%88"><span class="toc-number">6.</span> <span class="toc-text">难点与解决方案</span></a><ol class="toc-child"><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%9A%BE%E7%82%B9%E4%B8%80%EF%BC%9A%E5%A6%82%E4%BD%95%E6%94%AF%E6%8C%81%E5%A4%9A%E7%A7%8D-value-%E7%B1%BB%E5%9E%8B"><span class="toc-number">6.1.</span> <span class="toc-text">难点一：如何支持多种 value 类型</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%9A%BE%E7%82%B9%E4%BA%8C%EF%BC%9A%E8%BF%87%E6%9C%9F-key-%E5%A6%82%E4%BD%95%E5%A4%84%E7%90%86"><span class="toc-number">6.2.</span> <span class="toc-text">难点二：过期 key 如何处理</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%9A%BE%E7%82%B9%E4%B8%89%EF%BC%9A%E9%9B%86%E5%90%88%E8%BF%90%E7%AE%97%E7%9A%84%E8%AF%AD%E4%B9%89%E5%A4%84%E7%90%86"><span class="toc-number">6.3.</span> <span class="toc-text">难点三：集合运算的语义处理</span></a></li><li class="toc-item toc-level-3"><a class="toc-link" href="#%E9%9A%BE%E7%82%B9%E5%9B%9B%EF%BC%9AAOF-%E5%A6%82%E4%BD%95%E6%81%A2%E5%A4%8D%E5%86%85%E5%AD%98%E7%8A%B6%E6%80%81"><span class="toc-number">6.4.</span> <span class="toc-text">难点四：AOF 如何恢复内存状态</span></a></li></ol></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%88%90%E6%9E%9C"><span class="toc-number">7.</span> <span class="toc-text">成果</span></a></li><li class="toc-item toc-level-2"><a class="toc-link" href="#%E6%80%BB%E7%BB%93"><span class="toc-number">8.</span> <span class="toc-text">总结</span></a></li></ol></div></div><div class="card-widget card-recent-post"><div class="item-headline"><i class="fas fa-history"></i><span>最新文章</span></div><div class="aside-list"><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/05/16/my-redis-%E4%B8%80%E4%B8%AA%E4%BD%BF%E7%94%A8Rust%E5%AE%9E%E7%8E%B0%E7%9A%84%E7%AE%80%E6%98%93%E7%89%88redis/" title="用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持">用 Rust 实现一个简易 Redis：从 RESP 协议到多数据结构支持</a><time datetime="2026-05-15T16:00:00.000Z" title="发表于 2026-05-16 00:00:00">2026-05-16</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/05/14/Hexo%E5%8D%9A%E5%AE%A2%E5%8F%91%E5%B8%83%E6%95%99%E7%A8%8B/" title="Hexo 博客发布教程：从写文章到 GitHub Pages 上线">Hexo 博客发布教程：从写文章到 GitHub Pages 上线</a><time datetime="2026-05-14T14:45:00.000Z" title="发表于 2026-05-14 22:45:00">2026-05-14</time></div></div><div class="aside-list-item no-cover"><div class="content"><a class="title" href="/2026/05/14/hello-world/" title="Hello World">Hello World</a><time datetime="2026-05-14T13:55:27.128Z" title="发表于 2026-05-14 21:55:27">2026-05-14</time></div></div></div></div></div></div></main><footer id="footer"><div class="footer-other"><div class="footer-copyright"><span class="copyright">&copy;&nbsp;2025 - 2026 By 酷酷的陈浩</span><span class="framework-info"><span>框架 </span><a target="_blank" rel="noopener" href="https://hexo.io">Hexo 8.1.2</a><span class="footer-separator">|</span><span>主题 </span><a target="_blank" rel="noopener" href="https://github.com/jerryc127/hexo-theme-butterfly">Butterfly 5.5.3</a></span></div></div></footer></div><div id="rightside"><div id="rightside-config-hide"><button id="readmode" type="button" title="阅读模式"><i class="fas fa-book-open"></i></button><button id="darkmode" type="button" title="日间和夜间模式切换"><i class="fas fa-adjust"></i></button><button id="hide-aside-btn" type="button" title="单栏和双栏切换"><i class="fas fa-arrows-alt-h"></i></button></div><div id="rightside-config-show"><button id="rightside-config" type="button" title="设置"><i class="fas fa-cog fa-spin"></i></button><button class="close" id="mobile-toc-button" type="button" title="目录"><i class="fas fa-list-ul"></i></button><button id="go-up" type="button" title="回到顶部"><span class="scroll-percent"></span><i class="fas fa-arrow-up"></i></button></div></div><div><script src="/js/utils.js?v=5.5.3"></script><script src="/js/main.js?v=5.5.3"></script><div class="js-pjax"></div><script src="/js/blog-lamb.js?v=20260515"></script><script async data-pjax src="//busuanzi.ibruce.info/busuanzi/2.3/busuanzi.pure.mini.js"></script></div></body></html>
